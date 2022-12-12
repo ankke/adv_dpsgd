@@ -78,7 +78,9 @@ class Experiment:
         self.test_loader = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False, num_workers=2)
 
         self.classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
         if self.dp:
+            self._log("DP on")
             self.privacy_engine = opacus.PrivacyEngine()
             self.model, self.optimizer, self.train_loader = self.privacy_engine.make_private(
                 module=self.model,
@@ -87,7 +89,6 @@ class Experiment:
                 noise_multiplier=1.1,
                 max_grad_norm=1.0,
             )
-
 
     def _run_epoch(self, data_loader):
         self.model.train()
@@ -224,31 +225,31 @@ class Experiment:
 
         plt.plot(range(len(val_losses)), np.array(val_losses))
         plt.title('val loss')
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/val_loss.png")
+        if self.verbose:
+            plt.show()
 
         plt.plot(range(len(val_accuracies)), np.array(val_accuracies))
         plt.title('val acc')
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/val_acc.png")
+        if self.verbose:
+            plt.show()
 
         plt.plot(range(len(train_losses)), np.array(train_losses))
         plt.title('train loss')
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/train_loss.png")
+        if self.verbose:
+            plt.show()
 
         plt.plot(range(len(train_accuracies)), np.array(train_accuracies))
         plt.title('train acc')
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/train_acc.png")
+        if self.verbose:
+            plt.show()
 
     def _validate(self, data_loader):
         self.model.eval()
@@ -349,10 +350,10 @@ class Experiment:
         plt.title("Accuracy vs Epsilon")
         plt.xlabel("Epsilon")
         plt.ylabel("Accuracy")
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/acc_vs_eps.png")
+        if self.verbose:
+            plt.show()
 
         cnt = 0
         plt.figure(figsize=(8, 10))
@@ -368,9 +369,10 @@ class Experiment:
                 plt.title("{} -> {}".format(self.classes[orig], self.classes[adv]))
                 plt.imshow(np.transpose(ex, (1, 2, 0)))
         plt.tight_layout()
-        if self.verbose:
-            plt.show()
         if self.save_experiment:
             plt.savefig(f"{self.dir_name}/perturbed.png")
+        if self.verbose:
+            plt.show()
+
 
 
