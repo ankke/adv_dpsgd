@@ -10,6 +10,7 @@ import copy
 from datetime import datetime
 from .model import Net
 import os
+import opacus
 
 
 def initialize_weights(module):
@@ -33,6 +34,12 @@ class Experiment:
         self.adv_attack_mode = adv_attack_mode
         self.epsilon = epsilon
         self.dp = dp
+        self.device = device
+        self.verbose = verbose
+        self.disable_tqdm = not self.verbose
+        self.save_experiment = save_experiment
+        self.best_model_weights = None
+
         if name is None:
             adv_s = f"adv-{epsilon}" if adv_attack is not None else "non_adv"
             dp_s = "dp" if dp else "non_dp"
@@ -43,13 +50,9 @@ class Experiment:
         now = datetime.now()
         formatted_timestamp = now.strftime("%d-%m-%Y_%H:%M:%S")
         self.dir_name = f"{self.name}_{formatted_timestamp}"
-        os.mkdir(self.dir_name)
+        if self.save_experiment:
+            os.mkdir(self.dir_name)
 
-        self.device = device
-        self.verbose = verbose
-        self.disable_tqdm = not self.verbose
-        self.save_experiment = save_experiment
-        self.best_model_weights = None
         self._setup_training()
 
     def _log(self, message):
@@ -75,6 +78,16 @@ class Experiment:
         self.test_loader = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False, num_workers=2)
 
         self.classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+        if self.dp:
+            self.privacy_engine = opacus.PrivacyEngine()
+            self.model, self.optimizer, self.train_loader = self.privacy_engine.make_private(
+                module=self.model,
+                optimizer=self.optimizer,
+                data_loader=self.train_loader,
+                noise_multiplier=1.1,
+                max_grad_norm=1.0,
+            )
+
 
     def _run_epoch(self, data_loader):
         self.model.train()
@@ -275,7 +288,6 @@ class Experiment:
         return perturbed_image
 
     def test(self, eps, data_loader):
-        self._log("Adversarial robustness test started")
         correct = 0
         adv_examples = []
         self.model.eval()
@@ -320,6 +332,8 @@ class Experiment:
         self.verbose = verbose
         self._fit()
         self._log(f"Val accuracy: {self._validate(self.val_loader_x1)}")
+
+        self._log("Adversarial robustness test started")
         accuracies = []
         examples = []
         epsilons = [0, .1, .2, .3]
