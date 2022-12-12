@@ -22,7 +22,7 @@ def initialize_weights(module):
 
 
 class Experiment:
-    def __init__(self, batch_size, epochs, patience, adv_attack, adv_attack_mode, epsilon, dp, device, name=None, save_experiment=False, verbose=True):
+    def __init__(self, batch_size, epochs, patience, adv_attack, adv_attack_mode, epsilon, dp, device, save_experiment, verbose, name=None):
         # self.model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=False)
         self.model = Net().cuda() if torch.cuda.is_available() else Net()
         self.optimizer = optim.NAdam(self.model.parameters())
