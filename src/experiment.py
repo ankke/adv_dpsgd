@@ -89,6 +89,8 @@ class Experiment:
                 noise_multiplier=1.1,
                 max_grad_norm=1.0,
             )
+        else:
+            self._log("DP off")
 
     def _run_epoch(self, data_loader):
         self.model.train()
