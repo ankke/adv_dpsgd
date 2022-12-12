@@ -8,9 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 from datetime import datetime
-from .model import Net
+from model import Net
 import os
 import opacus
+from opacus.validators import ModuleValidator
 
 
 def initialize_weights(module):
@@ -21,10 +22,31 @@ def initialize_weights(module):
         nn.init.constant_(module.bias, 0)
 
 
+def convnet(num_classes):
+    return nn.Sequential(
+        nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.AvgPool2d(kernel_size=2, stride=2),
+        nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.AvgPool2d(kernel_size=2, stride=2),
+        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.AvgPool2d(kernel_size=2, stride=2),
+        nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+        nn.ReLU(),
+        nn.AdaptiveAvgPool2d((1, 1)),
+        nn.Flatten(start_dim=1, end_dim=-1),
+        nn.Linear(128, num_classes, bias=True),
+    )
+
+
 class Experiment:
-    def __init__(self, batch_size, epochs, patience, adv_attack, adv_attack_mode, epsilon, dp, device, save_experiment, verbose, name=None):
+    def __init__(self, batch_size, epochs, patience, adv_attack, adv_attack_mode, epsilon, dp, device, save_experiment,
+                 verbose, name=None):
         # self.model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=False)
-        self.model = Net().cuda() if torch.cuda.is_available() else Net()
+        # self.model = Net().cuda() if torch.cuda.is_available() else Net()
+        self.model = convnet(num_classes=10)
         self.optimizer = optim.NAdam(self.model.parameters())
         self.criterion = nn.CrossEntropyLoss()
         self.batch_size = batch_size
@@ -60,20 +82,20 @@ class Experiment:
             print(f"Experiment {self.name}: {message}")
 
     def _setup_training(self):
-        self._log("Loading data")
+        self._log("Loading")
         transform = transforms.Compose(
             [transforms.ToTensor(),
              #  transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
              ])
         learning_set = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 
-        train_set, val_set = torch.utils.data.random_split(learning_set, [35000, 15000], generator=torch.Generator().manual_seed(42))
-
-        self.train_loader = torch.utils.data.DataLoader(train_set, batch_size=self.batch_size, shuffle=True, num_workers=2)
+        train_set, val_set = torch.utils.data.random_split(learning_set, [35000, 15000],
+                                                           generator=torch.Generator().manual_seed(42))
+        self.train_loader = torch.utils.data.DataLoader(train_set, batch_size=self.batch_size, shuffle=True,
+                                                        num_workers=2)
 
         self.val_loader = torch.utils.data.DataLoader(val_set, batch_size=self.batch_size, num_workers=2)
         self.val_loader_x1 = torch.utils.data.DataLoader(val_set, batch_size=1, num_workers=2)
-
         test_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
         self.test_loader = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False, num_workers=2)
 
@@ -82,6 +104,8 @@ class Experiment:
         if self.dp:
             self._log("DP on")
             self.privacy_engine = opacus.PrivacyEngine()
+            self.model = ModuleValidator.fix(self.model)
+            self.optimizer = optim.NAdam(self.model.parameters())
             self.model, self.optimizer, self.train_loader = self.privacy_engine.make_private(
                 module=self.model,
                 optimizer=self.optimizer,
@@ -219,7 +243,7 @@ class Experiment:
                 min_val_loss = val_loss
                 self.best_model_weights = copy.deepcopy(self.model.state_dict())
                 if self.save_experiment:
-                    torch.save(self.model.state_dict(), f"{self.name}.pt")
+                    torch.save(self.model.state_dict(), f"{self.dir_name}/{self.name}.pt")
 
         self.model.load_state_dict(self.best_model_weights)
 
@@ -327,12 +351,11 @@ class Experiment:
                     adv_examples.append((init_pred.item(), final_pred.item(), adv_ex))
 
         final_acc = correct / float(len(data_loader))
-        self._log("Epsilon: {}\tTest Accuracy = {} / {} = {}".format(self.epsilon, correct, len(data_loader), final_acc))
+        self._log(
+            "Epsilon: {}\tTest Accuracy = {} / {} = {}".format(self.epsilon, correct, len(data_loader), final_acc))
         return final_acc, adv_examples
 
-    def run(self, save_experiment=False, verbose=True):
-        self.save_experiment = save_experiment
-        self.verbose = verbose
+    def run(self):
         self._fit()
         self._log(f"Val accuracy: {self._validate(self.val_loader_x1)}")
 
@@ -375,6 +398,3 @@ class Experiment:
             plt.savefig(f"{self.dir_name}/perturbed.png")
         if self.verbose:
             plt.show()
-
-
-
