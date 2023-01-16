@@ -1,79 +1,133 @@
-# from https://github.com/matthias-wright/cifar10-resnet
-import torch.nn as nn
+from torch import nn
+import warnings
+
+def initialize_weights(module):
+    if isinstance(module, (nn.Linear, nn.Conv2d)):
+        nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+    elif isinstance(module, nn.BatchNorm2d):
+        nn.init.constant_(module.weight, 1)
+        nn.init.constant_(module.bias, 0)
+
+def conv_bn_act(
+    in_channels, out_channels, pool=False, act_func=nn.Mish, num_groups=None
+):
+    if num_groups is not None:
+        warnings.warn("num_groups has no effect with BatchNorm")
+    layers = [
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+        nn.BatchNorm2d(out_channels),
+        act_func(),
+    ]
+    if pool:
+        layers.append(nn.MaxPool2d(2))
+    return nn.Sequential(*layers)
 
 
-class ResidualBlock(nn.Module):
+def conv_gn_act(in_channels, out_channels, pool=False, act_func=nn.Mish, num_groups=32):
+    """Conv-GroupNorm-Activation
     """
-    A residual block as defined by He et al.
-    """
+    layers = [
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+        nn.GroupNorm(min(num_groups, out_channels), out_channels),
+        act_func(),
+    ]
+    if pool:
+        layers.append(nn.MaxPool2d(2))
+    return nn.Sequential(*layers)
 
-    def __init__(self, in_channels, out_channels, kernel_size, padding, stride):
-        super(ResidualBlock, self).__init__()
-        self.conv_res1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
-                                   padding=padding, stride=stride, bias=False)
-        self.conv_res1_bn = nn.BatchNorm2d(num_features=out_channels, momentum=0.9)
-        self.conv_res2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=kernel_size,
-                                   padding=padding, bias=False)
-        self.conv_res2_bn = nn.BatchNorm2d(num_features=out_channels, momentum=0.9)
+class ResNet9(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 10,
+        act_func: nn.Module = nn.Mish,
+        scale_norm: bool = False,
+        norm_layer: str = "batch",
+        num_groups: tuple[int, ...] = (32, 32, 32, 32),
+    ):
+        """9-layer Residual Network. Architecture:
+        conv-conv-Residual(conv, conv)-conv-conv-Residual(conv-conv)-FC
+        Args:
+            in_channels (int, optional): Channels in the input image. Defaults to 3.
+            num_classes (int, optional): Number of classes. Defaults to 10.
+            act_func (nn.Module, optional): Activation function to use. Defaults to nn.Mish.
+            scale_norm (bool, optional): Whether to add an extra normalisation layer after each residual block. Defaults to False.
+            norm_layer (str, optional): Normalisation layer. One of `batch` or `group`. Defaults to "batch".
+            num_groups (tuple[int], optional): Number of groups in GroupNorm layers.\
+            Must be a tuple with 4 elements, corresponding to the GN layer in the first conv block, \
+            the first res block, the second conv block and the second res block. Defaults to (32, 32, 32, 32).
+        """
+        super().__init__()
 
-        if stride != 1:
-            # in case stride is not set to 1, we need to downsample the residual so that
-            # the dimensions are the same when we add them together
-            self.downsample = nn.Sequential(
-                nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(num_features=out_channels, momentum=0.9)
-            )
+        if norm_layer == "batch":
+            conv_block = conv_bn_act
+        elif norm_layer == "group":
+            conv_block = conv_gn_act
         else:
-            self.downsample = None
+            raise ValueError("`norm_layer` must be `batch` or `group`")
 
-        self.relu = nn.ReLU(inplace=False)
+        assert (
+            isinstance(num_groups, tuple) and len(num_groups) == 4
+        ), "num_groups must be a tuple with 4 members"
+        groups = num_groups
 
-    def forward(self, x):
-        residual = x
-
-        out = self.relu(self.conv_res1_bn(self.conv_res1(x)))
-        out = self.conv_res2_bn(self.conv_res2(out))
-
-        if self.downsample is not None:
-            residual = self.downsample(residual)
-
-        out = self.relu(out)
-        out += residual
-        return out
-
-
-class Net(nn.Module):
-    """
-    A Residual network.
-    """
-    def __init__(self):
-        super(Net, self).__init__()
-
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(num_features=64, momentum=0.9),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(num_features=128, momentum=0.9),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            ResidualBlock(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(num_features=256, momentum=0.9),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(num_features=256, momentum=0.9),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            ResidualBlock(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1),
-            nn.MaxPool2d(kernel_size=2, stride=2),
+        self.conv1 = conv_block(
+            in_channels, 64, act_func=act_func, num_groups=groups[0]
+        )
+        self.conv2 = conv_block(
+            64, 128, pool=True, act_func=act_func, num_groups=groups[0]
         )
 
-        self.fc = nn.Linear(in_features=1024, out_features=10, bias=True)
+        self.res1 = nn.Sequential(
+            *[
+                conv_block(128, 128, act_func=act_func, num_groups=groups[1]),
+                conv_block(128, 128, act_func=act_func, num_groups=groups[1]),
+            ]
+        )
 
-    def forward(self, x):
-        out = self.conv(x)
-        out = out.view(-1, out.shape[1] * out.shape[2] * out.shape[3])
-        out = self.fc(out)
+        self.conv3 = conv_block(
+            128, 256, pool=True, act_func=act_func, num_groups=groups[2]
+        )
+        self.conv4 = conv_block(
+            256, 256, pool=True, act_func=act_func, num_groups=groups[2]
+        )
+
+        self.res2 = nn.Sequential(
+            *[
+                conv_block(256, 256, act_func=act_func, num_groups=groups[3]),
+                conv_block(256, 256, act_func=act_func, num_groups=groups[3]),
+            ]
+        )
+
+        self.MP = nn.AdaptiveMaxPool2d((2, 2))
+        self.FlatFeats = nn.Flatten()
+        self.classifier = nn.Linear(1024, num_classes)
+
+        if scale_norm:
+            self.scale_norm_1 = (
+                nn.BatchNorm2d(128)
+                if norm_layer == "batch"
+                else nn.GroupNorm(min(num_groups[1], 128), 128)
+            )  # type:ignore
+            self.scale_norm_2 = (
+                nn.BatchNorm2d(256)
+                if norm_layer == "batch"
+                else nn.GroupNorm(min(groups[3], 256), 256)
+            )  # type:ignore
+        else:
+            self.scale_norm_1 = nn.Identity()  # type:ignore
+            self.scale_norm_2 = nn.Identity()  # type:ignore
+
+    def forward(self, xb):
+        out = self.conv1(xb)
+        out = self.conv2(out)
+        out = self.res1(out) + out
+        out = self.scale_norm_1(out)
+        out = self.conv3(out)
+        out = self.conv4(out)
+        out = self.res2(out) + out
+        out = self.scale_norm_2(out)
+        out = self.MP(out)
+        out_emb = self.FlatFeats(out)
+        out = self.classifier(out_emb)
         return out
