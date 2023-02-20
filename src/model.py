@@ -1,133 +1,94 @@
-from torch import nn
-import warnings
+import torch
+import torchvision
+import opacus
+import copy
 
-def initialize_weights(module):
-    if isinstance(module, (nn.Linear, nn.Conv2d)):
-        nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
-    elif isinstance(module, nn.BatchNorm2d):
-        nn.init.constant_(module.weight, 1)
-        nn.init.constant_(module.bias, 0)
+import config
 
-def conv_bn_act(
-    in_channels, out_channels, pool=False, act_func=nn.Mish, num_groups=None
-):
-    if num_groups is not None:
-        warnings.warn("num_groups has no effect with BatchNorm")
-    layers = [
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-        nn.BatchNorm2d(out_channels),
-        act_func(),
-    ]
-    if pool:
-        layers.append(nn.MaxPool2d(2))
-    return nn.Sequential(*layers)
+import torchvision.transforms as transforms
+import torch.optim as optim
 
+from res_net import ResNet9
 
-def conv_gn_act(in_channels, out_channels, pool=False, act_func=nn.Mish, num_groups=32):
-    """Conv-GroupNorm-Activation
-    """
-    layers = [
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-        nn.GroupNorm(min(num_groups, out_channels), out_channels),
-        act_func(),
-    ]
-    if pool:
-        layers.append(nn.MaxPool2d(2))
-    return nn.Sequential(*layers)
+CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
+CIFAR10_STD_DEV = (0.2023, 0.1994, 0.2010)
 
-class ResNet9(nn.Module):
-    def __init__(
-        self,
-        in_channels: int = 3,
-        num_classes: int = 10,
-        act_func: nn.Module = nn.Mish,
-        scale_norm: bool = False,
-        norm_layer: str = "batch",
-        num_groups: tuple[int, ...] = (32, 32, 32, 32),
-    ):
-        """9-layer Residual Network. Architecture:
-        conv-conv-Residual(conv, conv)-conv-conv-Residual(conv-conv)-FC
-        Args:
-            in_channels (int, optional): Channels in the input image. Defaults to 3.
-            num_classes (int, optional): Number of classes. Defaults to 10.
-            act_func (nn.Module, optional): Activation function to use. Defaults to nn.Mish.
-            scale_norm (bool, optional): Whether to add an extra normalisation layer after each residual block. Defaults to False.
-            norm_layer (str, optional): Normalisation layer. One of `batch` or `group`. Defaults to "batch".
-            num_groups (tuple[int], optional): Number of groups in GroupNorm layers.\
-            Must be a tuple with 4 elements, corresponding to the GN layer in the first conv block, \
-            the first res block, the second conv block and the second res block. Defaults to (32, 32, 32, 32).
-        """
-        super().__init__()
+class Model:
+    def __init__(self, dataset='cifar'):
+        self.dataset = dataset
 
-        if norm_layer == "batch":
-            conv_block = conv_bn_act
-        elif norm_layer == "group":
-            conv_block = conv_gn_act
+    def setup(self, epochs, batch_size, dp, target_epsilon, max_grad_norm, device):
+        if self.dataset == 'cifar':
+            train_set, test_set, self.classes = get_CIFAR()
+            in_channels = 3
+        elif self.dataset == 'mnist':
+            train_set, test_set, self.classes = get_MNIST()
+            in_channels = 1
         else:
-            raise ValueError("`norm_layer` must be `batch` or `group`")
+            raise Exception
 
-        assert (
-            isinstance(num_groups, tuple) and len(num_groups) == 4
-        ), "num_groups must be a tuple with 4 members"
-        groups = num_groups
+        train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8)
+        test_loader = torch.utils.data.DataLoader(test_set, batch_size=256, shuffle=False, num_workers=8)
 
-        self.conv1 = conv_block(
-            in_channels, 64, act_func=act_func, num_groups=groups[0]
-        )
-        self.conv2 = conv_block(
-            64, 128, pool=True, act_func=act_func, num_groups=groups[0]
-        )
+        self.net = ResNet9(norm_layer="group", in_channels=in_channels)
+        self.adv_net = ResNet9(norm_layer="group", in_channels=in_channels)
+        optimizer = optim.NAdam(self.net.parameters())
 
-        self.res1 = nn.Sequential(
-            *[
-                conv_block(128, 128, act_func=act_func, num_groups=groups[1]),
-                conv_block(128, 128, act_func=act_func, num_groups=groups[1]),
-            ]
-        )
-
-        self.conv3 = conv_block(
-            128, 256, pool=True, act_func=act_func, num_groups=groups[2]
-        )
-        self.conv4 = conv_block(
-            256, 256, pool=True, act_func=act_func, num_groups=groups[2]
-        )
-
-        self.res2 = nn.Sequential(
-            *[
-                conv_block(256, 256, act_func=act_func, num_groups=groups[3]),
-                conv_block(256, 256, act_func=act_func, num_groups=groups[3]),
-            ]
-        )
-
-        self.MP = nn.AdaptiveMaxPool2d((2, 2))
-        self.FlatFeats = nn.Flatten()
-        self.classifier = nn.Linear(1024, num_classes)
-
-        if scale_norm:
-            self.scale_norm_1 = (
-                nn.BatchNorm2d(128)
-                if norm_layer == "batch"
-                else nn.GroupNorm(min(num_groups[1], 128), 128)
-            )  # type:ignore
-            self.scale_norm_2 = (
-                nn.BatchNorm2d(256)
-                if norm_layer == "batch"
-                else nn.GroupNorm(min(groups[3], 256), 256)
-            )  # type:ignore
+        if dp:
+            print("DP on")
+            self.privacy_engine = opacus.PrivacyEngine()
+            self.net, optimizer, train_loader = self.privacy_engine.make_private_with_epsilon(
+                module=self.net,
+                optimizer=optimizer,
+                data_loader=train_loader,
+                epochs=epochs,
+                target_epsilon=target_epsilon,
+                target_delta=1e-5,
+                max_grad_norm=max_grad_norm,
+                noise_generator=torch.Generator(device=device).manual_seed(config.seed)
+            )
         else:
-            self.scale_norm_1 = nn.Identity()  # type:ignore
-            self.scale_norm_2 = nn.Identity()  # type:ignore
+            print("DP off")
 
-    def forward(self, xb):
-        out = self.conv1(xb)
-        out = self.conv2(out)
-        out = self.res1(out) + out
-        out = self.scale_norm_1(out)
-        out = self.conv3(out)
-        out = self.conv4(out)
-        out = self.res2(out) + out
-        out = self.scale_norm_2(out)
-        out = self.MP(out)
-        out_emb = self.FlatFeats(out)
-        out = self.classifier(out_emb)
-        return out
+        return optimizer, train_loader, test_loader
+
+    def forward(self, inputs):
+        return self.net(inputs)
+        
+    def to(self, device):
+        self.net.to(device)
+        self.adv_net.to(device)
+
+    def mode(self, eval):
+        if eval:
+            self.net.eval()
+        else:
+            self.net.train()
+
+    def get_model(self, dp):
+        if dp:
+            self.adv_net.load_state_dict(copy.deepcopy(self.net._module.state_dict()))
+            model = self.adv_net
+        else:
+            model = self.net
+        return model
+        
+
+def get_CIFAR():
+    transform = transforms.Compose(
+            [transforms.ToTensor(),
+            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD_DEV) 
+            ])
+    train_set = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    test_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+    return train_set, test_set, classes
+
+def get_MNIST():
+    transform = transforms.Compose(
+            [transforms.ToTensor(),
+            ])
+    train_set = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    test_set = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    classes = (x for x in range(0,9))
+    return train_set, test_set, classes
