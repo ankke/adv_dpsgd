@@ -29,6 +29,7 @@ class Model:
 
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=8)
         test_loader = torch.utils.data.DataLoader(test_set, batch_size=256, shuffle=False, num_workers=8)
+        test_loader_x1 = torch.utils.data.DataLoader(test_set, batch_size=1, shuffle=False, num_workers=8)
 
         self.net = ResNet9(norm_layer="group", in_channels=in_channels)
         self.adv_net = ResNet9(norm_layer="group", in_channels=in_channels)
@@ -50,7 +51,7 @@ class Model:
         else:
             print("DP off")
 
-        return optimizer, train_loader, test_loader
+        return optimizer, train_loader, test_loader, test_loader_x1
 
     def forward(self, inputs):
         return self.net(inputs)
@@ -77,7 +78,7 @@ class Model:
 def get_CIFAR():
     transform = transforms.Compose(
             [transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD_DEV) 
+            # transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD_DEV) 
             ])
     train_set = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
     test_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)

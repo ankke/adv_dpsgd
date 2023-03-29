@@ -1,0 +1,5 @@
+id,batch_size,epochs,adv,adv_attack_mode,params,dp,target_epsilon,dataset,max_batch_size,max_grad_norm,trainig_time,train_acc,test_acc
+1,1024,50,non adv,batch,non_adv,True,7.5,cifar,256,1.5,1600.0692970752716,0.7281146272480137,0.6896484375
+2,1024,50,non adv,batch,non_adv,True,7.5,cifar,256,1.5,1487.867092847824,0.7273488491648101,0.68984375
+3,1024,50,non adv,batch,non_adv,True,7.5,cifar,256,1.5,1635.1361503601074,0.7407305636016683,0.69931640625
+4,1024,50,non adv,batch,non_adv,True,7.5,cifar,256,1.5,1635.6278824806213,0.730283274157677,0.685546875

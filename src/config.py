@@ -1,3 +1,3 @@
-verbose = False
-disable_tqdm = True
-seed = 50
+verbose = True
+disable_tqdm = False
+seed = 34

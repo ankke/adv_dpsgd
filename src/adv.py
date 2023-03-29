@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+import torchattacks
 
 import torch
 
@@ -26,10 +27,10 @@ class Attack:
 
         perturbed_inputs = attack(inputs, targets)
         
-    #         plt.imshow(np.transpose(torchvision.utils.make_grid(perturbed_inputs).cpu().numpy(), (1, 2, 0)))
-    #         plt.show()
-    #         plt.imshow(np.transpose(torchvision.utils.make_grid(inputs).cpu().numpy(), (1, 2, 0)))
-    #         plt.show()
+            # plt.imshow(np.transpose(torchvision.utils.make_grid(perturbed_inputs).cpu().numpy(), (1, 2, 0)))
+            # plt.show()
+            # plt.imshow(np.transpose(torchvision.utils.make_grid(inputs).cpu().numpy(), (1, 2, 0)))
+            # plt.show()
         
         return perturbed_inputs, targets
 
@@ -41,11 +42,11 @@ class Attack:
             sample = torch.unsqueeze(inputs[i], dim=0)
             sample_target = targets[i:i + 1]
 
-            # plt.imshow(np.transpose(sample.squeeze().detach().cpu().numpy(), (1, 2, 0)))
-            # plt.show()
-            # plt.imshow(np.transpose(adv_image.squeeze().detach().cpu().numpy(), (1, 2, 0)))
-            # plt.show()
             adv_images[i] = attack(sample, sample_target)
+            plt.imshow(np.transpose(sample.squeeze().detach().cpu().numpy(), (1, 2, 0)))
+            plt.show()
+            plt.imshow(np.transpose(adv_images[i].squeeze().detach().cpu().numpy(), (1, 2, 0)))
+            plt.show()
 
         # imshow(torchvision.utils.make_grid(adv_images).cpu())
         # imshow(torchvision.utils.make_grid(inputs).cpu())
@@ -55,15 +56,15 @@ class Attack:
         return adv_images, targets
 
 
-def adv_test(model, dataloader, classes, device, attack):
+def adv_test(model, dataloader, classes, device, attack):        
     print("Adversarial robustness test started")
     accuracies = []
     examples = []
-    epsilons = [0, .05, .1]
+    epsilons = [0, 2/255, 8/255]
 
     for eps in epsilons:
         params = {'eps': eps}
-        acc, ex = test(eps, model, dataloader, device, attack.attack, params)
+        acc, ex = test(eps, model, dataloader, device, torchattacks.FGSM, params)
         accuracies.append(acc)
         examples.append(ex)
     
@@ -84,10 +85,9 @@ def test(eps, model, data_loader, device, attack, params):
 
             if init_pred.item() != target.item():
                 continue
-            print(len(data))
-            perturbed_inputs = attack(model, **params)
+            perturbe = attack(model, **params)
+            perturbed_inputs = perturbe(data, target)
             output = model(perturbed_inputs)
-            print(3)
 
             final_pred = torch.argmax(output, dim=1).long()
             if final_pred.item() == target.item():
@@ -112,7 +112,7 @@ def plot(epsilons, accuracies, examples, classes):
     plt.figure(figsize=(5, 5))
     plt.plot(epsilons, accuracies, "*-")
     plt.yticks(np.arange(0, max(accuracies) + 0.1, step=0.1))
-    plt.xticks(np.arange(0, .35, step=0.05))
+    plt.xticks(np.arange(0, 9/255, step=0.01))
     plt.title("Accuracy vs Epsilon")
     plt.xlabel("Epsilon")
     plt.ylabel("Accuracy")
